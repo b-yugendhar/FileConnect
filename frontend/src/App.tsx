@@ -1,18 +1,18 @@
 import { useRef, useState } from "react";
 
 const TRANSFER_MODES = {
-  WIFI_NEAR: { 
+  WIFI_NEAR: {
     //cchange later
-    chunkSize: 64 * 1024,   
-    maxBuffer: 2 * 1024 * 1024 
+    chunkSize: 64 * 1024,
+    maxBuffer: 2 * 1024 * 1024
   },
-  WIFI_FAR: { 
-    chunkSize: 16 * 1024,   
-    maxBuffer: 512 * 1024     
+  WIFI_FAR: {
+    chunkSize: 16 * 1024,
+    maxBuffer: 512 * 1024
   },
-  MOBILE: { 
-    chunkSize: 16 * 1024,     
-    maxBuffer: 256 * 1024     )
+  MOBILE: {
+    chunkSize: 16 * 1024,
+    maxBuffer: 256 * 1024
   }
 };
 
@@ -54,21 +54,21 @@ export default function App() {
     } else {
       receivedChunks.current.push(data);
       receivedBytes.current += data.byteLength;
-      
+
       const now = Date.now();
       if (now - lastUpdateRef.current > 500) {//change later
-         if (incomingFile.current) {
-             const percent = ((receivedBytes.current / incomingFile.current.size) * 100).toFixed(1);
-             setStatus(`Receiving: ${percent}%`);
-         }
-         lastUpdateRef.current = now;
+        if (incomingFile.current) {
+          const percent = ((receivedBytes.current / incomingFile.current.size) * 100).toFixed(1);
+          setStatus(`Receiving: ${percent}%`);
+        }
+        lastUpdateRef.current = now;
       }
     }
   };
 
   const setupDataChannel = (channel: RTCDataChannel) => {
     channel.binaryType = "arraybuffer";
-   //change later
+    //change later
     channel.bufferedAmountLowThreshold = 0;
     channel.onopen = () => setStatus("P2P Connected!");
     channel.onmessage = handleIncoming;
@@ -76,12 +76,24 @@ export default function App() {
   };
 
   const forceHighBandwidth = (sdp: string) => {
-    return sdp.replace(/(m=application\s\d+\sUDP\/DTLS\/SCTP\s.*)/, '$1\r\nb=AS:500000');
+    try {
+      if (sdp.includes("m=application")) {
+        return sdp.replace(/(m=application\s\d+\s[A-Z\/]+\s.*)/, '$1\r\nb=AS:500000');
+      }
+      return sdp;
+    } catch {
+      return sdp;
+    }
   };
 
   const connect = () => {
-    setStatus("Connecting...");
-    const socket = new WebSocket("wss://signaling-server-production-97a2.up.railway.app/ws");
+    const wsUrl = import.meta.env.VITE_SIGNALING_URL ||
+      (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+        ? `ws://${window.location.hostname}:8081/ws`
+        : "wss://signaling-server-production-97a2.up.railway.app/ws");
+
+    setStatus(`Connecting to ${wsUrl}...`);
+    const socket = new WebSocket(wsUrl);
     socketRef.current = socket;
 
     const pc = new RTCPeerConnection({
@@ -102,7 +114,25 @@ export default function App() {
       }
     };
 
+    pc.onconnectionstatechange = () => {
+      console.log("WebRTC Connection state:", pc.connectionState);
+      if (pc.connectionState === "connected") {
+        setStatus("P2P Connected!");
+      } else if (pc.connectionState === "failed") {
+        setStatus("P2P Connection Failed! Ensure both peers joined same room.");
+      }
+    };
+
     pc.ondatachannel = (e) => setupDataChannel(e.channel);
+
+    socket.onerror = (err) => {
+      console.error("WebSocket error:", err);
+      setStatus(`WebSocket Failed to connect to ${wsUrl}. Is backend running?`);
+    };
+
+    socket.onclose = () => {
+      console.log("WebSocket connection closed");
+    };
 
     socket.onopen = () => {
       socket.send(JSON.stringify({ type: "JOIN", roomId: room }));
@@ -164,7 +194,7 @@ export default function App() {
     try {
       while (offset < file.size) {
         if (dc.bufferedAmount >= maxBuffer) {
-           await waitForBuffer();
+          await waitForBuffer();
         }
 
         const slice = file.slice(offset, offset + chunkSize);
@@ -172,12 +202,12 @@ export default function App() {
         dc.send(buffer);
         offset += buffer.byteLength;
 
-      //test
+        //test
         if (offset % (chunkSize * 50) === 0 || offset === file.size) {
-           const percent = ((offset / file.size) * 100).toFixed(1);
-           setStatus(`Sending: ${percent}%`);
-           //test
-           await new Promise(r => setTimeout(r, 0));
+          const percent = ((offset / file.size) * 100).toFixed(1);
+          setStatus(`Sending: ${percent}%`);
+          //test
+          await new Promise(r => setTimeout(r, 0));
         }
       }
 
@@ -192,27 +222,27 @@ export default function App() {
   return (
     <div style={{ padding: "40px", textAlign: "center", fontFamily: "sans-serif" }}>
       <h2>P2P File Transfer</h2>
-      
-      <div style={{marginBottom: '20px'}}>
+
+      <div style={{ marginBottom: '20px' }}>
         <label>Network Mode: </label>
-        <select value={mode} onChange={(e) => setMode(e.target.value as any)} style={{padding: '5px'}}>
+        <select value={mode} onChange={(e) => setMode(e.target.value as any)} style={{ padding: '5px' }}>
           <option value="WIFI_NEAR">Same WiFi (Fastest)</option>
           <option value="WIFI_FAR">Weak WiFi / Far</option>
           <option value="MOBILE">Mobile Data (Stable)</option>
         </select>
       </div>
 
-      <input value={room} onChange={(e) => setRoom(e.target.value)} style={{padding: '12px', width: '150px'}} />
-      <button onClick={connect} style={{padding: '12px'}}>Join</button>
+      <input value={room} onChange={(e) => setRoom(e.target.value)} style={{ padding: '12px', width: '150px' }} />
+      <button onClick={connect} style={{ padding: '12px' }}>Join</button>
       <p>Status: <strong>{status}</strong></p>
       <hr />
-      <div style={{marginTop: '20px'}}>
+      <div style={{ marginTop: '20px' }}>
         <input ref={fileRef} type="file" />
-        <button 
-          onClick={sendFile} 
-          style={{display: 'block', margin: '20px auto', padding: '15px 30px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', fontSize: '18px'}}
+        <button
+          onClick={sendFile}
+          style={{ display: 'block', margin: '20px auto', padding: '15px 30px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', fontSize: '18px' }}
         >
-            Send File
+          Send File
         </button>
       </div>
     </div>
