@@ -1,30 +1,41 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useCallback } from "react";
+import "./index.css";
 
 const TRANSFER_MODES = {
-  WIFI_NEAR: {
-    //cchange later
-    chunkSize: 64 * 1024,
-    maxBuffer: 2 * 1024 * 1024
-  },
-  WIFI_FAR: {
-    chunkSize: 16 * 1024,
-    maxBuffer: 512 * 1024
-  },
-  MOBILE: {
-    chunkSize: 16 * 1024,
-    maxBuffer: 256 * 1024
-  }
-};
+  WIFI_NEAR: { label: "Same WiFi", icon: "⚡", chunkSize: 64 * 1024, maxBuffer: 2 * 1024 * 1024 },
+  WIFI_FAR: { label: "Weak WiFi", icon: "📶", chunkSize: 16 * 1024, maxBuffer: 512 * 1024 },
+  MOBILE: { label: "Mobile", icon: "📱", chunkSize: 16 * 1024, maxBuffer: 256 * 1024 },
+} as const;
+
+type Mode = keyof typeof TRANSFER_MODES;
+
+type StatusLevel = "idle" | "connected" | "active" | "error";
+
+function getStatusLevel(status: string): StatusLevel {
+  if (status.toLowerCase().includes("failed") || status.toLowerCase().includes("error")) return "error";
+  if (status.includes("P2P Connected")) return "connected";
+  if (status.includes("Sending") || status.includes("Receiving") || status.includes("Joined")) return "active";
+  return "idle";
+}
+
+function extractPercent(status: string): number | null {
+  const m = status.match(/([\d.]+)%/);
+  return m ? parseFloat(m[1]) : null;
+}
 
 export default function App() {
-  const [status, setStatus] = useState("Disconnected");
+  const [status, setStatus] = useState("Ready to connect");
   const [room, setRoom] = useState("room1");
-  const [mode, setMode] = useState<"WIFI_NEAR" | "WIFI_FAR" | "MOBILE">("MOBILE");
+  const [mode, setMode] = useState<Mode>("MOBILE");
+  const [dragOver, setDragOver] = useState(false);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
 
   const socketRef = useRef<WebSocket | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const selectedFileRef = useRef<File | null>(null);
 
   const receivedChunks = useRef<ArrayBuffer[]>([]);
   const incomingFile = useRef<{ name: string; size: number } | null>(null);
@@ -44,22 +55,19 @@ export default function App() {
         const blob = new Blob(receivedChunks.current);
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url;
-        a.download = incomingFile.current.name;
-        a.click();
-        setStatus(`File received: ${incomingFile.current.name}`);
+        a.href = url; a.download = incomingFile.current.name; a.click();
+        setStatus(`✅ Received: ${incomingFile.current.name}`);
         incomingFile.current = null;
         receivedChunks.current = [];
       }
     } else {
       receivedChunks.current.push(data);
       receivedBytes.current += data.byteLength;
-
       const now = Date.now();
-      if (now - lastUpdateRef.current > 500) {//change later
+      if (now - lastUpdateRef.current > 300) {
         if (incomingFile.current) {
-          const percent = ((receivedBytes.current / incomingFile.current.size) * 100).toFixed(1);
-          setStatus(`Receiving: ${percent}%`);
+          const pct = ((receivedBytes.current / incomingFile.current.size) * 100).toFixed(1);
+          setStatus(`Receiving: ${pct}%`);
         }
         lastUpdateRef.current = now;
       }
@@ -68,22 +76,18 @@ export default function App() {
 
   const setupDataChannel = (channel: RTCDataChannel) => {
     channel.binaryType = "arraybuffer";
-    //change later
     channel.bufferedAmountLowThreshold = 0;
-    channel.onopen = () => setStatus("P2P Connected!");
+    channel.onopen = () => { setStatus("P2P Connected!"); setConnected(true); };
     channel.onmessage = handleIncoming;
     dcRef.current = channel;
   };
 
   const forceHighBandwidth = (sdp: string) => {
     try {
-      if (sdp.includes("m=application")) {
+      if (sdp.includes("m=application"))
         return sdp.replace(/(m=application\s\d+\s[A-Z\/]+\s.*)/, '$1\r\nb=AS:500000');
-      }
       return sdp;
-    } catch {
-      return sdp;
-    }
+    } catch { return sdp; }
   };
 
   const connect = () => {
@@ -92,56 +96,40 @@ export default function App() {
         ? `ws://${window.location.hostname}:8081/ws`
         : "wss://fileconnect.onrender.com/ws");
 
-    setStatus(`Connecting to ${wsUrl}...`);
+    setStatus(`Connecting…`);
     const socket = new WebSocket(wsUrl);
     socketRef.current = socket;
 
     const pc = new RTCPeerConnection({
       iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
-        {
-          urls: "turn:openrelay.metered.ca:443",
-          username: "openrelayproject",
-          credential: "openrelayproject"
-        }
+        { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
       ],
     });
     pcRef.current = pc;
 
     pc.onicecandidate = (e) => {
-      if (e.candidate && socket.readyState === WebSocket.OPEN) {
+      if (e.candidate && socket.readyState === WebSocket.OPEN)
         socket.send(JSON.stringify({ type: "ICE", roomId: room, candidate: e.candidate }));
-      }
     };
-
     pc.onconnectionstatechange = () => {
-      console.log("WebRTC Connection state:", pc.connectionState);
-      if (pc.connectionState === "connected") {
-        setStatus("P2P Connected!");
-      } else if (pc.connectionState === "failed") {
-        setStatus("P2P Connection Failed! Ensure both peers joined same room.");
-      }
+      if (pc.connectionState === "connected") { setStatus("P2P Connected!"); setConnected(true); }
+      else if (pc.connectionState === "failed") setStatus("Connection failed — ensure both peers joined the same room.");
     };
-
     pc.ondatachannel = (e) => setupDataChannel(e.channel);
 
-    socket.onerror = (err) => {
-      console.error("WebSocket error:", err);
-      setStatus(`WebSocket Failed to connect to ${wsUrl}. Is backend running?`);
-    };
-
-    socket.onclose = () => {
-      console.log("WebSocket connection closed");
-    };
-
+    socket.onerror = () => setStatus(`WebSocket error — is the server running?`);
+    socket.onclose = () => { setConnected(false); };
     socket.onopen = () => {
       socket.send(JSON.stringify({ type: "JOIN", roomId: room }));
-      setStatus("Joined room. Waiting for peer...");
+      setStatus("Joined room — waiting for peer…");
     };
 
+    let offered = false;
     socket.onmessage = async (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === "JOINED") {
+      if (msg.type === "JOINED" && !offered) {
+        offered = true;
         const channel = pc.createDataChannel("filetransfer");
         setupDataChannel(channel);
         const offer = await pc.createOffer();
@@ -163,88 +151,143 @@ export default function App() {
   };
 
   const sendFile = async () => {
-    const file = fileRef.current?.files?.[0];
+    const file = selectedFileRef.current ?? fileRef.current?.files?.[0];
     const dc = dcRef.current;
+    if (!file || !dc || dc.readyState !== "open") { setStatus("⚠️ Connect and select a file first!"); return; }
 
-    if (!file || !dc || dc.readyState !== "open") return alert("Connect first!");
-
+    const { chunkSize, maxBuffer } = TRANSFER_MODES[mode];
     dc.send(JSON.stringify({ type: "META", name: file.name, size: file.size }));
-
-    const config = TRANSFER_MODES[mode];
-    const { chunkSize, maxBuffer } = config;
-    //change
     dc.bufferedAmountLowThreshold = 0;
 
     let offset = 0;
-
-    const waitForBuffer = () => {
-      return new Promise<void>((resolve) => {
-        if (dc.bufferedAmount < maxBuffer) {
-          resolve();
-        } else {
-          //test
-          dc.onbufferedamountlow = () => {
-            dc.onbufferedamountlow = null;
-            resolve();
-          };
-        }
-      });
-    };
+    const waitForBuffer = () => new Promise<void>((resolve) => {
+      if (dc.bufferedAmount < maxBuffer) { resolve(); return; }
+      dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; resolve(); };
+    });
 
     try {
       while (offset < file.size) {
-        if (dc.bufferedAmount >= maxBuffer) {
-          await waitForBuffer();
-        }
-
-        const slice = file.slice(offset, offset + chunkSize);
-        const buffer = await slice.arrayBuffer();
+        if (dc.bufferedAmount >= maxBuffer) await waitForBuffer();
+        const buffer = await file.slice(offset, offset + chunkSize).arrayBuffer();
         dc.send(buffer);
         offset += buffer.byteLength;
-
-        //test
-        if (offset % (chunkSize * 50) === 0 || offset === file.size) {
-          const percent = ((offset / file.size) * 100).toFixed(1);
-          setStatus(`Sending: ${percent}%`);
-          //test
+        if (offset % (chunkSize * 50) === 0 || offset >= file.size) {
+          setStatus(`Sending: ${((offset / file.size) * 100).toFixed(1)}%`);
           await new Promise(r => setTimeout(r, 0));
         }
       }
-
       dc.send(JSON.stringify({ type: "DONE" }));
-      setStatus("Sent Successfully!");
-    } catch (err) {
-      console.error(err);
-      setStatus("Transfer Failed");
+      setStatus("✅ Sent successfully!");
+    } catch {
+      setStatus("❌ Transfer failed");
     }
   };
 
-  return (
-    <div style={{ padding: "40px", textAlign: "center", fontFamily: "sans-serif" }}>
-      <h2>P2P File Transfer</h2>
+  const onFileChange = useCallback((file: File) => {
+    selectedFileRef.current = file;
+    setFileName(file.name);
+  }, []);
 
-      <div style={{ marginBottom: '20px' }}>
-        <label>Network Mode: </label>
-        <select value={mode} onChange={(e) => setMode(e.target.value as any)} style={{ padding: '5px' }}>
-          <option value="WIFI_NEAR">Same WiFi (Fastest)</option>
-          <option value="WIFI_FAR">Weak WiFi / Far</option>
-          <option value="MOBILE">Mobile Data (Stable)</option>
-        </select>
+  const level = getStatusLevel(status);
+  const pct = extractPercent(status);
+  const showProgress = pct !== null;
+
+  return (
+    <div className="card">
+      {/* Header */}
+      <div className="header">
+        <div className="icon">📡</div>
+        <h1>FileConnect</h1>
+        <p>Peer-to-peer file transfer — no servers, no limits</p>
       </div>
 
-      <input value={room} onChange={(e) => setRoom(e.target.value)} style={{ padding: '12px', width: '150px' }} />
-      <button onClick={connect} style={{ padding: '12px' }}>Join</button>
-      <p>Status: <strong>{status}</strong></p>
-      <hr />
-      <div style={{ marginTop: '20px' }}>
-        <input ref={fileRef} type="file" />
-        <button
-          onClick={sendFile}
-          style={{ display: 'block', margin: '20px auto', padding: '15px 30px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', fontSize: '18px' }}
-        >
-          Send File
+      {/* Room + Join */}
+      <label>Room ID</label>
+      <div className="input-row">
+        <input
+          id="room-input"
+          type="text"
+          value={room}
+          onChange={(e) => setRoom(e.target.value)}
+          placeholder="Enter room name…"
+        />
+        <button className="btn btn-primary" onClick={connect} id="join-btn">
+          {connected ? "↺ Rejoin" : "Join"}
         </button>
       </div>
+
+      {/* Status */}
+      <div className={`status-badge`}>
+        <span className={`status-dot ${level}`} />
+        <span>{status}</span>
+      </div>
+
+      {/* Progress */}
+      <div className={`progress-wrap ${showProgress ? "visible" : ""}`}>
+        <div className="progress-header">
+          <span>{status.includes("Sending") ? "Uploading" : "Downloading"}</span>
+          <span>{pct?.toFixed(1)}%</span>
+        </div>
+        <div className="progress-bar-bg">
+          <div className="progress-bar-fill" style={{ width: `${pct ?? 0}%` }} />
+        </div>
+      </div>
+
+      <div className="divider" />
+
+      {/* Network mode */}
+      <label>Network Mode</label>
+      <div className="mode-grid">
+        {(Object.keys(TRANSFER_MODES) as Mode[]).map((m) => (
+          <button
+            key={m}
+            className={`mode-btn ${mode === m ? "active" : ""}`}
+            onClick={() => setMode(m)}
+            id={`mode-${m.toLowerCase()}`}
+          >
+            <span className="mode-icon">{TRANSFER_MODES[m].icon}</span>
+            {TRANSFER_MODES[m].label}
+          </button>
+        ))}
+      </div>
+
+      {/* Drop zone */}
+      <div
+        className={`drop-zone ${dragOver ? "drag-over" : ""}`}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault(); setDragOver(false);
+          const f = e.dataTransfer.files[0];
+          if (f) onFileChange(f);
+        }}
+        onClick={() => fileRef.current?.click()}
+        id="drop-zone"
+      >
+        <input
+          ref={fileRef}
+          type="file"
+          style={{ display: "none" }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) onFileChange(f); }}
+          id="file-input"
+        />
+        <div className="drop-icon">{fileName ? "📄" : "☁️"}</div>
+        {fileName
+          ? <div className="file-name">{fileName}</div>
+          : <p>Drop a file here or <strong>click to browse</strong></p>
+        }
+      </div>
+
+      {/* Send */}
+      <button
+        className="btn btn-primary"
+        style={{ width: "100%", padding: "0.85rem", fontSize: "0.95rem" }}
+        onClick={sendFile}
+        disabled={!connected || !fileName}
+        id="send-btn"
+      >
+        ↑ Send File
+      </button>
     </div>
   );
 }
