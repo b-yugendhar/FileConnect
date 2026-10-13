@@ -2,9 +2,9 @@ import { useRef, useState, useCallback } from "react";
 import "./index.css";
 
 const TRANSFER_MODES = {
-  WIFI_NEAR: { label: "Same WiFi", icon: "⚡", chunkSize: 64 * 1024, maxBuffer: 2 * 1024 * 1024 },
-  WIFI_FAR: { label: "Weak WiFi", icon: "📶", chunkSize: 16 * 1024, maxBuffer: 512 * 1024 },
-  MOBILE: { label: "Mobile", icon: "📱", chunkSize: 16 * 1024, maxBuffer: 256 * 1024 },
+  WIFI_NEAR: { label: "Same WiFi", chunkSize: 64 * 1024, maxBuffer: 2 * 1024 * 1024 },
+  WIFI_FAR: { label: "Weak WiFi", chunkSize: 16 * 1024, maxBuffer: 512 * 1024 },
+  MOBILE: { label: "Mobile", chunkSize: 16 * 1024, maxBuffer: 256 * 1024 },
 } as const;
 
 type Mode = keyof typeof TRANSFER_MODES;
@@ -56,7 +56,7 @@ export default function App() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url; a.download = incomingFile.current.name; a.click();
-        setStatus(`✅ Received: ${incomingFile.current.name}`);
+        setStatus(`Received: ${incomingFile.current.name}`);
         incomingFile.current = null;
         receivedChunks.current = [];
       }
@@ -196,7 +196,38 @@ export default function App() {
     <div className="card">
       {/* Header */}
       <div className="header">
-        <div className="icon">📡</div>
+        {/* Animated chain-link SVG */}
+        <div className="chain-wrap">
+          <svg className="chain-svg" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            {/* Shimmer overlay */}
+            <g className="chain-shimmer" stroke="url(#shimmerGrad)" strokeWidth="3.5" strokeLinecap="round" fill="none">
+              <path d="M24 36 Q20 44 26 50 Q32 56 40 50 L50 40 Q56 32 50 26 Q44 20 36 26" />
+            </g>
+            {/* Top-left link */}
+            <g className="chain-link-top">
+              <rect x="6" y="18" width="26" height="16" rx="8" stroke="url(#grad1)" strokeWidth="4.5" fill="none" />
+            </g>
+            {/* Bottom-right link */}
+            <g className="chain-link-bottom">
+              <rect x="32" y="30" width="26" height="16" rx="8" stroke="url(#grad2)" strokeWidth="4.5" fill="none" />
+            </g>
+            <defs>
+              <linearGradient id="grad1" x1="6" y1="18" x2="32" y2="34" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#5b72ee" />
+                <stop offset="100%" stopColor="#8b5cf6" />
+              </linearGradient>
+              <linearGradient id="grad2" x1="32" y1="30" x2="58" y2="46" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#8b5cf6" />
+                <stop offset="100%" stopColor="#5b72ee" />
+              </linearGradient>
+              <linearGradient id="shimmerGrad" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#fff" stopOpacity="0" />
+                <stop offset="50%" stopColor="#fff" stopOpacity="0.6" />
+                <stop offset="100%" stopColor="#fff" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
         <h1>FileConnect</h1>
         <p>Peer-to-peer file transfer — no servers, no limits</p>
       </div>
@@ -245,7 +276,6 @@ export default function App() {
             onClick={() => setMode(m)}
             id={`mode-${m.toLowerCase()}`}
           >
-            <span className="mode-icon">{TRANSFER_MODES[m].icon}</span>
             {TRANSFER_MODES[m].label}
           </button>
         ))}
