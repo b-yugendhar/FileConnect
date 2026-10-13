@@ -90,7 +90,7 @@ export default function App() {
     const wsUrl = import.meta.env.VITE_SIGNALING_URL ||
       (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
         ? `ws://${window.location.hostname}:8081/ws`
-        : "wss://signaling-server-production-97a2.up.railway.app/ws");
+        : "wss://fileconnect.onrender.com/ws");
 
     setStatus(`Connecting to ${wsUrl}...`);
     const socket = new WebSocket(wsUrl);
